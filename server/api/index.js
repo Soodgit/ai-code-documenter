@@ -1,5 +1,4 @@
 // server/api/index.js
-const serverless = require("serverless-http");
 const express = require("express");
 const cookieParser = require("cookie-parser");
 const helmet = require("helmet");
@@ -14,6 +13,7 @@ require("dotenv").config({ path: require("path").join(__dirname, "..", ".env") }
 connectDB();
 
 const app = express();
+
 app.use(helmet());
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 app.use(cookieParser());
@@ -26,5 +26,4 @@ app.get("/api/health", (req, res) => res.json({ ok: true }));
 app.use("/api/auth", authRoute);
 app.use("/api/snippets", snippetRoute);
 
-module.exports = app;
-module.exports.handler = serverless(app);
+module.exports = app; // 👈 no serverless wrapper needed with @vercel/node
