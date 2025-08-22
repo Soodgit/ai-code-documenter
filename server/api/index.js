@@ -20,10 +20,13 @@ app.use(cookieParser());
 app.use(express.json());
 
 const clientURL = process.env.CLIENT_URL || "http://localhost:5173";
-app.use(cors({ origin: clientURL, credentials: true }));
 
-app.get("/api/health", (req, res) => res.json({ ok: true }));
-app.use("/api/auth", authRoute);
-app.use("/api/snippets", snippetRoute);
+app.use(cors({
+  origin: clientURL,
+  credentials: true,
+  methods: ["GET","POST","PATCH","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type","Authorization"]
+}));
+app.options("*", cors());
 
 module.exports = app; // 👈 no serverless wrapper needed with @vercel/node
