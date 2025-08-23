@@ -57,10 +57,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Enable CORS
-app.use(cors(corsDelegate));
-app.options(/.*/, cors(corsDelegate)); // Handle OPTIONS requests
-
 // Core middlewares
 app.use(cookieParser());  // Cookie parser
 app.use(express.json({ limit: "1mb" }));  // Limit the size of incoming request body
