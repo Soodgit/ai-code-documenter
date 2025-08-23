@@ -2,9 +2,13 @@
   "name": "server",
   "version": "1.0.0",
   "main": "api/index.js",
-  "engines": { "node": "18.x" },
+  "engines": {
+    "node": "18.x"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+     "dev": "nodemon server/server.js",
+    "start": "node server/server.js"
   },
   "keywords": [],
   "author": "",
@@ -23,6 +27,7 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.17.1",
     "nodemailer": "^7.0.5",
-    "nodemailer-sendgrid-transport": "^0.2.0"
+    "nodemailer-sendgrid-transport": "^0.2.0",
+    "serverless-http": "^3.2.0"
   }
 }

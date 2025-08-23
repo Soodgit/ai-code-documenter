@@ -1,10 +1,34 @@
-import axios from "axios";
+import { api } from "../api/client";
 
-const API = axios.create({ baseURL: "http://localhost:5000/api" });
 
-const register        = (username, email, password) => API.post("/auth/register", { username, email, password });
-const login           = (email, password)           => API.post("/auth/login", { email, password });
-const forgotPassword  = (email)                      => API.post("/auth/forgot-password", { email });
-const resetPassword   = (token, password)            => API.post(`/auth/reset-password/${token}`, { password });
+export async function login(email, password) {
+const { data } = await api.post("/auth/login", { email, password });
+// Store access token in memory/localStorage (NOT httpOnly cookie)
+localStorage.setItem("access_token", data.token);
+return data.user;
+}
 
-export default { register, login, forgotPassword, resetPassword };
+
+export async function register(username, email, password) {
+const { data } = await api.post("/auth/register", { username, email, password });
+return data;
+}
+
+
+export async function logout() {
+localStorage.removeItem("access_token");
+await api.post("/auth/logout");
+}
+
+
+export async function getAccessToken() {
+const token = localStorage.getItem("access_token");
+return token;
+}
+
+
+export async function refresh() {
+const { data } = await api.post("/auth/refresh");
+localStorage.setItem("access_token", data.token);
+return data.token;
+}
