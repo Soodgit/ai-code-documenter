@@ -46,13 +46,13 @@ const ACCESS_TTL = process.env.JWT_EXPIRES_IN || "15m";
  * - httpOnly:   not accessible via JS to mitigate XSS.
  * - sameSite:   "none" for cross-site on production; "lax" for local dev.
  * - secure:     cookie over HTTPS only in production.
- * - path:       root so it’s sent on all requests.
+ * - path:       root so it's sent on all requests.
  * - maxAge:     7 days; we rotate on each refresh.
  */
 const rtCookie = {
   httpOnly: true,
-  sameSite: isProd ? "none" : "lax",
-  secure: isProd,
+  sameSite: "none",  // Always use "none" for cross-site requests
+  secure: true,      // Always true for cross-site "none"
   path: "/",
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
@@ -126,7 +126,7 @@ function resetEmailHTML(resetURL) {
           </tr>
           <tr>
             <td style="padding:0 24px 28px;color:#94a3b8;font-size:13px">
-              If you didn’t request this, you can safely ignore this email.
+              If you didn't request this, you can safely ignore this email.
             </td>
           </tr>
         </table>
@@ -169,7 +169,7 @@ function publicUser(u) {
 }
 
 /**
- * Password comparator that’s resilient to model implementation differences.
+ * Password comparator that's resilient to model implementation differences.
  * - Primary: use the instance method if present.
  * - Fallback: compare with bcrypt if password is a string.
  */
@@ -399,32 +399,3 @@ exports.forgotPassword = async (req, res) => {
  * Resets the password for a valid, non-expired token.
  */
 exports.resetPassword = async (req, res) => {
-  try {
-    const { token } = req.params;
-    const { password } = req.body;
-
-    if (!password) {
-      return res.status(400).json({ message: "Password is required" });
-    }
-
-    const user = await User.findOne({
-      resetPasswordToken: token,
-      resetPasswordExpires: { $gt: Date.now() },
-    }).select("+password");
-
-    if (!user) {
-      return res.status(400).json({ message: "Invalid or expired token" });
-    }
-
-    // Assigning will trigger model hashing in pre('save') hook
-    user.password = password;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpires = undefined;
-    await user.save();
-
-    return res.json({ message: "Password reset successful" });
-  } catch (err) {
-    handleError("reset", err, res);
-  }
-};
-
