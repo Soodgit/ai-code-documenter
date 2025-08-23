@@ -38,6 +38,7 @@ app.use(cors({
       !origin ||
       origin === "http://localhost:5173" ||
       origin === process.env.CLIENT_URL ||
+      origin === "https://ai-code-documenter.vercel.app" ||
       /^https:\/\/ai-code-documenter-.*-soodgits-projects\.vercel\.app$/.test(origin)
     ) {
       callback(null, true);
