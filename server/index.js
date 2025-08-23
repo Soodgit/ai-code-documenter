@@ -1,79 +1,69 @@
 // server/index.js
-require("dotenv").config();  // Load environment variables
+require("dotenv").config();  // Ensure the environment variables are loaded
 
 const express = require("express");
 const helmet = require("helmet");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const rateLimit = require("express-rate-limit");
-const connectDB = require("./config/db");  // MongoDB connection setup
-const authRoute = require("./routes/auth");  // Authentication routes
-const snippetRoute = require("./routes/snippets");  // Snippet routes
-const path = require("path");
+const connectDB = require("./config/db"); // Correct file path for DB connection
+
+const authRoute = require("./routes/auth");  // Correct path for authentication routes
+const snippetRoute = require("./routes/snippets");  // Correct path for snippet routes
 
 const app = express();
+const PORT = process.env.PORT || 5000;
 
-// CORS Setup (allow specific origins)
-const ALLOWED_ORIGINS = [
-  process.env.CLIENT_URL,       // your production frontend URL
-  "http://localhost:5173",      // your local dev frontend URL
-].filter(Boolean);
+// Database connection
+connectDB();
 
-// Add Vercel preview support (allow *.vercel.app origins)
-const ALLOW_VERCEL_PREVIEWS = true;
+// Security headers (using Helmet)
+app.use(helmet());
+app.disable("x-powered-by"); // Hide Express info for security
 
-const corsDelegate = (req, cb) => {
-  const origin = req.headers.origin || "";
-  const ok =
-    ALLOWED_ORIGINS.includes(origin) || 
-    (ALLOW_VERCEL_PREVIEWS && /\.vercel\.app$/.test(origin));
-
-  cb(null, ok
-    ? {
-        origin,
-        credentials: true, 
-        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allowedHeaders: ["Content-Type", "Authorization"],
-        optionsSuccessStatus: 204,
-      }
-    : { origin: false });
-};
-
-// Ensure Vary header for CDN (separate caches for each origin)
-app.use((req, res, next) => {
-  res.setHeader("Vary", "Origin");
-  next();
-});
-
-// Trust proxy behind Vercel for secure cookies
-app.set("trust proxy", 1);
-
-// CORS setup
-app.use(cors(corsDelegate));
-app.options(/.*/, cors(corsDelegate)); // Handle preflight (OPTIONS)
-
-/* Security headers */
-app.use(helmet());  // Enables many security-related HTTP headers
-app.disable("x-powered-by"); // Hide Express info from the response header
-
-/* Rate Limiting */
+// Rate Limiting middleware
 app.use(
   rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // Max 100 requests in 15 minutes
+    max: 100,  // Limit each IP to 100 requests per window
     standardHeaders: true,
     legacyHeaders: false,
   })
 );
 
+// CORS configuration (allow specific origins)
+const ALLOWED_ORIGINS = [
+  process.env.CLIENT_URL,  // Set this to your frontend URL
+  "http://localhost:5173", // Local development URL
+].filter(Boolean);
+
+const corsDelegate = (req, cb) => {
+  const origin = req.headers.origin || "";
+  const ok = ALLOWED_ORIGINS.includes(origin); // Check if the origin is allowed
+  cb(null, ok ? {
+    origin,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 204,
+  } : { origin: false });
+};
+
+// Ensure Vary header for caching by origin
+app.use((req, res, next) => {
+  res.setHeader("Vary", "Origin");
+  next();
+});
+
+// Enable CORS
+app.use(cors(corsDelegate));
+app.options(/.*/, cors(corsDelegate)); // Handle OPTIONS requests
+
 // Core middlewares
-app.use(cookieParser()); // Cookie parser to handle cookies
-app.use(express.json({ limit: "1mb" })); // Limit request size to prevent overloading
+app.use(cookieParser());  // Cookie parser
+app.use(express.json({ limit: "1mb" }));  // Limit the size of incoming request body
 
-// Connect to the database
-connectDB();
-
-/* Routes */
+// Routes
 app.get("/api/health", (_req, res) =>
   res.json({
     ok: true,
@@ -82,27 +72,23 @@ app.get("/api/health", (_req, res) =>
   })
 );
 
-// API routes
-app.use("/api/auth", authRoute);
-app.use("/api/snippets", snippetRoute);
+app.use("/api/auth", authRoute);  // Authentication route
+app.use("/api/snippets", snippetRoute);  // Snippet route
 
-// 404 for unknown routes
+// Handle 404 for unknown routes
 app.use("/api", (_req, res) => res.status(404).json({ message: "Not found" }));
 
-/* Error handler */
+// Global error handler
 app.use((err, _req, res, _next) => {
   console.error("[unhandled]", err);
-  res
-    .status(err.status || 500)
-    .json({ message: "Server error", detail: err.message || "Unknown error" });
+  res.status(err.status || 500).json({ message: "Server error", detail: err.message || "Unknown error" });
 });
 
 // Export the app for serverless
 module.exports = app;
 
+// For local dev, run the server locally
 if (!process.env.VERCEL) {
-  // Local development: listen on the specified port
-  const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {
     console.log(`🚀 Server running at http://localhost:${PORT}`);
   });
