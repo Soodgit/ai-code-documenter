@@ -35,7 +35,8 @@ app.use(
 const ALLOWED_ORIGINS = [
   process.env.CLIENT_URL,
   "http://localhost:5173",
-  "https://ai-code-documenter-fqhq9uila-soodgits-projects.vercel.app"
+  "https://ai-code-documenter-fqhq9uila-soodgits-projects.vercel.app",
+  "https://ai-code-documenter-issag96ur-soodgits-projects.vercel.app"
 ].filter(Boolean);
 
 const corsDelegate = (req, cb) => {
