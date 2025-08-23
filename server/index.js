@@ -33,8 +33,9 @@ app.use(
 
 // CORS configuration (allow specific origins)
 const ALLOWED_ORIGINS = [
-  process.env.CLIENT_URL,  // Set this to your frontend URL
-  "http://localhost:5173", // Local development URL
+  process.env.CLIENT_URL,
+  "http://localhost:5173",
+  "https://ai-code-documenter-fqhq9uila-soodgits-projects.vercel.app"
 ].filter(Boolean);
 
 const corsDelegate = (req, cb) => {
