@@ -29,4 +29,8 @@ app.use(cors({
 }));
 app.options("*", cors());
 
+// Routes
+app.use("/api/auth", authRoute);
+app.use("/api/snippets", snippetRoute);
+
 module.exports = app; // 👈 no serverless wrapper needed with @vercel/node
