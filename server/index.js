@@ -32,24 +32,24 @@ app.use(
 );
 
 // CORS configuration (allow specific origins)
-const ALLOWED_ORIGINS = [
-  process.env.CLIENT_URL,
-  "http://localhost:5173",
-  "https://ai-code-documenter-fqhq9uila-soodgits-projects.vercel.app",
-  "https://ai-code-documenter-issag96ur-soodgits-projects.vercel.app"
-].filter(Boolean);
-
-const corsDelegate = (req, cb) => {
-  const origin = req.headers.origin || "";
-  const ok = ALLOWED_ORIGINS.includes(origin); // Check if the origin is allowed
-  cb(null, ok ? {
-    origin,
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    optionsSuccessStatus: 204,
-  } : { origin: false });
-};
+app.use(cors({
+  origin: (origin, callback) => {
+    if (
+      !origin ||
+      origin === "http://localhost:5173" ||
+      origin === process.env.CLIENT_URL ||
+      /^https:\/\/ai-code-documenter-.*-soodgits-projects\.vercel\.app$/.test(origin)
+    ) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204,
+}));
 
 // Ensure Vary header for caching by origin
 app.use((req, res, next) => {
