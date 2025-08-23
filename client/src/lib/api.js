@@ -5,7 +5,7 @@ const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
 // Main API client (all app requests go through this)
 const api = axios.create({
-  baseURL: BASE_URL,
+  baseURL: import.meta.env.VITE_API_URL,
   withCredentials: true, // if your refresh token is a cookie
 });
 
