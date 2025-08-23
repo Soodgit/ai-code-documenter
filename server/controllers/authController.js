@@ -1,72 +1,106 @@
-// server/controllers/authController.js
-const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
 const { validationResult } = require("express-validator");
+const User = require("../models/User");
 
-// 👉 nice branded emails
-const {
-  resetPasswordEmail,
-  passwordChangedEmail,
-} = require("../utils/emailTemplates");
+// ---------- helpers ----------
+const isProd =
+  process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production";
 
-// ---------------- Env helpers ----------------
-const isProd = process.env.NODE_ENV === "production";
-const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
-const APP_NAME = process.env.APP_NAME || "DevDocs AI";
-const COMPANY_NAME = process.env.COMPANY_NAME || "DevDocs Inc.";
-const SUPPORT_URL =
-  process.env.SUPPORT_URL || `${CLIENT_URL.replace(/\/$/, "")}/support`;
-const LOGO_URL = process.env.LOGO_URL || `${CLIENT_URL.replace(/\/$/, "")}/logo.png`;
+const ACCESS_SECRET = process.env.JWT_SECRET || "dev_access";
+const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || "dev_refresh";
 
-// ---------------- JWT helpers ----------------
 const signAccess = (id) =>
-  jwt.sign({ id }, process.env.JWT_SECRET || "dev_access", { expiresIn: "15m" });
+  jwt.sign({ id }, ACCESS_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || "15m" });
 
 const signRefresh = (id) =>
-  jwt.sign({ id }, process.env.JWT_REFRESH_SECRET || "dev_refresh", {
-    expiresIn: "7d",
-  });
+  jwt.sign({ id }, REFRESH_SECRET, { expiresIn: "7d" });
 
-// ---------------- Cookie options (auto‑secure in prod) ----------------
+/** Cross-site cookie options (works when FE and BE are on different domains) */
 const rtCookie = {
   httpOnly: true,
-  sameSite: isProd ? "none" : "lax", // "none" for cross‑site HTTPS
-  secure: isProd,                    // true on HTTPS
+  sameSite: isProd ? "none" : "lax",
+  secure: isProd,
   path: "/",
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
 
-// ---------------- Mailer ----------------
+// Reusable mailer
 const transporter = nodemailer.createTransport({
   service: "gmail",
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
 });
 
-// ---------------- Utilities ----------------
-function send422IfInvalid(req, res) {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    res.status(422).json({
-      errors: errors.array().map((e) => ({ field: e.path, msg: e.msg })),
-    });
-    return true;
-  }
-  return false;
+// Minimal but nice-looking HTML templates (use your own if you already added them)
+function brand() {
+  const APP = process.env.APP_NAME || "DevDocs AI";
+  const COMPANY = process.env.COMPANY_NAME || "DevDocs Inc.";
+  const LOGO_URL =
+    process.env.LOGO_URL ||
+    "https://dummyimage.com/128x128/111827/ffffff&text=Logo";
+  return { APP, COMPANY, LOGO_URL };
 }
 
-function jsonServerError(res, label, err) {
-  console.error(`${label}:`, err);
-  return res.status(500).json({ message: "Server error" });
+function resetEmailHTML(resetURL) {
+  const { APP, COMPANY, LOGO_URL } = brand();
+  const year = new Date().getFullYear();
+  return `
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0b1220;padding:24px 0;color:#e5edff;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif">
+    <tr>
+      <td align="center">
+        <table width="560" cellpadding="0" cellspacing="0" style="background:#0f172a;border:1px solid #1e293b;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.35)">
+          <tr>
+            <td style="padding:24px 24px 0" align="center">
+              <img src="${LOGO_URL}" alt="${APP}" width="60" height="60" style="border-radius:12px;display:block"/>
+              <div style="font-size:22px;font-weight:800;margin-top:8px">${APP}</div>
+              <div style="color:#94a3b8;margin-top:6px">Reset your password</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:18px 24px 0;line-height:1.6;color:#cbd5e1">
+              We received a request to reset your password. Click the button below to set a new one. This link is valid for <b>10 minutes</b>.
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 24px" align="center">
+              <a href="${resetURL}" style="display:inline-block;padding:12px 20px;background:#3b82f6;border-radius:10px;color:#fff;text-decoration:none;font-weight:700">Reset Password</a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 24px 6px;color:#94a3b8;font-size:13px">
+              Or copy and paste this URL into your browser:
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 24px 22px">
+              <code style="display:block;background:#0b1220;border:1px solid #1f2937;border-radius:8px;padding:10px;color:#cbd5e1;word-break:break-all">
+                ${resetURL}
+              </code>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 24px 28px;color:#94a3b8;font-size:13px">
+              If you didn’t request this, you can safely ignore this email.
+            </td>
+          </tr>
+        </table>
+        <div style="color:#64748b;font-size:12px;margin-top:14px">${COMPANY} • © ${year}</div>
+      </td>
+    </tr>
+  </table>`;
 }
 
-/* =======================
-   REGISTER
-======================= */
-const registerUser = async (req, res) => {
+// ---------- controllers ----------
+
+/** POST /api/auth/register */
+exports.registerUser = async (req, res) => {
   try {
-    if (send422IfInvalid(req, res)) return;
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
 
     const { username, email, password } = req.body;
 
@@ -75,31 +109,31 @@ const registerUser = async (req, res) => {
 
     const user = await User.create({ username, email, password });
 
-    // issue tokens
     const access = signAccess(user._id);
     const refresh = signRefresh(user._id);
 
-    // rotate/store refresh on user record
+    // Persist refresh token for rotation/invalidation
     user.refreshToken = refresh;
     await user.save({ validateBeforeSave: false });
 
     res.cookie("rt", refresh, rtCookie);
+
     return res.status(201).json({
       message: "Account created",
       token: access,
       user: { id: user._id, username: user.username, email: user.email },
     });
   } catch (e) {
-    return jsonServerError(res, "Register error", e);
+    console.error("[register] error:", e);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-/* =======================
-   LOGIN
-======================= */
-const loginUser = async (req, res) => {
+/** POST /api/auth/login */
+exports.loginUser = async (req, res) => {
   try {
-    if (send422IfInvalid(req, res)) return;
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
 
     const { email, password } = req.body;
 
@@ -114,27 +148,27 @@ const loginUser = async (req, res) => {
     await user.save({ validateBeforeSave: false });
 
     res.cookie("rt", refresh, rtCookie);
+
     return res.json({
       message: "Login successful",
       token: access,
       user: { id: user._id, username: user.username, email: user.email },
     });
   } catch (e) {
-    return jsonServerError(res, "Login error", e);
+    console.error("[login] error:", e);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-/* =======================
-   REFRESH (silent)
-======================= */
-const refreshToken = async (req, res) => {
+/** POST /api/auth/refresh (silent) */
+exports.refreshToken = async (req, res) => {
   try {
     const token = req.cookies?.rt;
     if (!token) return res.status(401).json({ message: "No refresh token" });
 
     let payload;
     try {
-      payload = jwt.verify(token, process.env.JWT_REFRESH_SECRET || "dev_refresh");
+      payload = jwt.verify(token, REFRESH_SECRET);
     } catch {
       return res.status(401).json({ message: "Invalid refresh token" });
     }
@@ -143,47 +177,42 @@ const refreshToken = async (req, res) => {
     if (!user || user.refreshToken !== token)
       return res.status(401).json({ message: "Refresh token mismatch" });
 
-    // rotate refresh
+    // rotate
     const newRefresh = signRefresh(user._id);
     user.refreshToken = newRefresh;
     await user.save({ validateBeforeSave: false });
 
     const access = signAccess(user._id);
+
     res.cookie("rt", newRefresh, rtCookie);
     return res.json({ token: access });
   } catch (e) {
-    return jsonServerError(res, "Refresh error", e);
+    console.error("[refresh] error:", e);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-/* =======================
-   LOGOUT
-======================= */
-const logoutUser = async (req, res) => {
+/** POST /api/auth/logout */
+exports.logoutUser = async (req, res) => {
   try {
     const token = req.cookies?.rt;
     if (token) {
-      const payload = jwt.decode(token);
-      if (payload?.id) {
-        await User.findByIdAndUpdate(payload.id, { $set: { refreshToken: null } });
+      const decoded = jwt.decode(token);
+      if (decoded?.id) {
+        await User.findByIdAndUpdate(decoded.id, { $set: { refreshToken: null } });
       }
     }
     res.clearCookie("rt", { ...rtCookie, maxAge: 0 });
     res.json({ ok: true });
   } catch (e) {
-    // even if revoke fails, clear cookie
     res.clearCookie("rt", { ...rtCookie, maxAge: 0 });
     res.json({ ok: true });
   }
 };
 
-/* =======================
-   FORGOT PASSWORD (HTML email)
-======================= */
-const forgotPassword = async (req, res) => {
+/** POST /api/auth/forgot */
+exports.forgotPassword = async (req, res) => {
   try {
-    if (send422IfInvalid(req, res)) return;
-
     const { email } = req.body;
 
     const user = await User.findOne({ email });
@@ -194,50 +223,35 @@ const forgotPassword = async (req, res) => {
     user.resetPasswordExpires = Date.now() + 10 * 60 * 1000; // 10 min
     await user.save({ validateBeforeSave: false });
 
-    const resetURL = `${CLIENT_URL.replace(/\/$/, "")}/reset-password/${resetToken}`;
-
-    // Pretty email (HTML + TXT)
-    const emailPkg = resetPasswordEmail({
-      appName: APP_NAME,
-      company: COMPANY_NAME,
-      logoUrl: LOGO_URL,
-      resetUrl: resetURL,
-      supportUrl: SUPPORT_URL,
-      username: user.username,
-      expiryMinutes: 10,
-    });
+    const clientURL = process.env.CLIENT_URL || "http://localhost:5173";
+    const resetURL = `${clientURL}/reset-password/${resetToken}`;
 
     try {
       await transporter.sendMail({
-        from: `"${APP_NAME}" <${process.env.EMAIL_USER}>`,
+        from: `"${process.env.APP_NAME || "DevDocs AI"}" <${process.env.EMAIL_USER}>`,
         to: user.email,
-        subject: emailPkg.subject,
-        html: emailPkg.html,
-        text: emailPkg.text,
+        subject: "Reset your password",
+        html: resetEmailHTML(resetURL),
       });
-
-      return res.json({ message: "Reset link sent" });
+      res.json({ message: "Reset link sent" });
     } catch (mailErr) {
-      console.error("Email send failed:", mailErr.message);
-      // Dev fallback: share link to enable local testing
-      return res.status(200).json({
-        message: "Email send failed (dev). Use the reset link below.",
+      console.error("[forgot] email failed:", mailErr.message);
+      // Still respond success in dev, include URL to test
+      res.status(200).json({
+        message: "Email send failed (dev). Use the link below.",
         devResetURL: resetURL,
       });
     }
   } catch (e) {
-    return jsonServerError(res, "Forgot error", e);
+    console.error("[forgot] error:", e);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-/* =======================
-   RESET PASSWORD (+ confirmation email)
-======================= */
-const resetPassword = async (req, res) => {
+/** POST /api/auth/reset/:token */
+exports.resetPassword = async (req, res) => {
   try {
-    if (send422IfInvalid(req, res)) return;
-
-    const { token } = req.params; // :token
+    const { token } = req.params;
     const { password } = req.body;
     if (!password) return res.status(400).json({ message: "Password is required" });
 
@@ -248,47 +262,14 @@ const resetPassword = async (req, res) => {
 
     if (!user) return res.status(400).json({ message: "Invalid or expired token" });
 
-    // pre-save hook will hash
-    user.password = password;
+    user.password = password; // model hook hashes it
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
-
-    // also revoke current refresh token(s) for safety
-    user.refreshToken = null;
-
     await user.save();
 
-    // optional: send "password changed" confirmation email
-    try {
-      const confirmPkg = passwordChangedEmail({
-        appName: APP_NAME,
-        company: COMPANY_NAME,
-        logoUrl: LOGO_URL,
-        supportUrl: SUPPORT_URL,
-        username: user.username,
-      });
-      await transporter.sendMail({
-        from: `"${APP_NAME}" <${process.env.EMAIL_USER}>`,
-        to: user.email,
-        subject: confirmPkg.subject,
-        html: confirmPkg.html,
-        text: confirmPkg.text,
-      });
-    } catch (mailErr) {
-      console.warn("Password changed email failed:", mailErr.message);
-    }
-
-    return res.json({ message: "Password reset successful" });
+    res.json({ message: "Password reset successful" });
   } catch (e) {
-    return jsonServerError(res, "Reset error", e);
+    console.error("[reset] error:", e);
+    res.status(500).json({ message: "Server error" });
   }
-};
-
-module.exports = {
-  registerUser,
-  loginUser,
-  refreshToken,
-  logoutUser,
-  forgotPassword,
-  resetPassword,
 };
