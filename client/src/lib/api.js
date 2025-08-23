@@ -1,21 +1,29 @@
 // src/lib/api.js
 import axios from "axios";
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+/**
+ * Resolve the base URL for API requests.
+ *
+ * If `VITE_API_URL` is undefined (e.g. when running via `npm run dev`),
+ * default to the backend on `http://localhost:5000` so that relative
+ * `/api/*` paths do not point at the Vite dev server.
+ */
+const BASE_URL = import.meta.env?.VITE_API_URL || "http://localhost:5000";
 
-// Main API client (all app requests go through this)
+// Create a single Axios instance for all app requests.
+// Using BASE_URL here ensures the client talks to your Express backend by default.
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL,
-  withCredentials: true, // if your refresh token is a cookie
+  baseURL: BASE_URL,
+  withCredentials: true,
 });
 
-// A dedicated client for refresh calls to avoid interceptor loops
+// Separate client for token refreshes to prevent interceptor recursion.
 const refreshClient = axios.create({
   baseURL: BASE_URL,
   withCredentials: true,
 });
 
-/** --- Small helpers ------------------------------------------------------ */
+/* Helper functions to manage auth tokens */
 export function setAuthToken(token) {
   if (token) {
     localStorage.setItem("token", token);
@@ -32,25 +40,26 @@ export function clearAuth() {
   localStorage.removeItem("user");
 }
 
-/** --- Attach token to every request ------------------------------------- */
+/* Attach token to every outgoing request if present */
 api.interceptors.request.use((config) => {
   const t = localStorage.getItem("token");
-  if (t) config.headers.Authorization = `Bearer ${t}`;
+  if (t) {
+    config.headers = config.headers ?? {};
+    config.headers.Authorization = `Bearer ${t}`;
+  }
   return config;
 });
 
-/** --- 401 refresh logic (single flight + queue) ------------------------- */
+/* 401 Refresh Token logic with single-flight and queued requests */
 let isRefreshing = false;
 let waitQueue = [];
 
-// Resolve all queued requests with new token
-function resolveQueue(token) {
-  waitQueue.forEach(({ resolve }) => resolve(token));
+function resolveQueue(newToken) {
+  waitQueue.forEach(({ resolve }) => resolve(newToken));
   waitQueue = [];
 }
-// Reject all queued requests
-function rejectQueue(err) {
-  waitQueue.forEach(({ reject }) => reject(err));
+function rejectQueue(error) {
+  waitQueue.forEach(({ reject }) => reject(error));
   waitQueue = [];
 }
 
@@ -60,10 +69,12 @@ api.interceptors.response.use(
     const status = error?.response?.status;
     const original = error?.config;
 
-    // If request has no config or already retried → just fail
-    if (!original || original._retry) return Promise.reject(error);
+    // Ignore if no config or already retried
+    if (!original || original._retry) {
+      return Promise.reject(error);
+    }
 
-    // Try refresh exactly once on 401
+    // Automatically refresh once on 401 Unauthorized
     if (status === 401) {
       original._retry = true;
 
@@ -71,10 +82,8 @@ api.interceptors.response.use(
       if (!isRefreshing) {
         isRefreshing = true;
         try {
-          // Important: use refreshClient to avoid the same response interceptor
           const { data } = await refreshClient.post("/api/auth/refresh");
           const newToken = data?.token;
-
           if (!newToken) throw new Error("No token in refresh response");
 
           setAuthToken(newToken);
@@ -93,18 +102,15 @@ api.interceptors.response.use(
         }
       }
 
-      // Queue this request until refresh finishes
+      // Queue the original request until refresh is done
       try {
         const newToken = await new Promise((resolve, reject) => {
           waitQueue.push({ resolve, reject });
         });
-
-        // Retry original with the fresh token
-        original.headers = original.headers || {};
+        original.headers = original.headers ?? {};
         original.headers.Authorization = `Bearer ${newToken}`;
         return api(original);
       } catch (e) {
-        // If refresh failed, bubble the original error
         return Promise.reject(error);
       }
     }
