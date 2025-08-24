@@ -50,6 +50,36 @@ function brand() {
   return { APP, COMPANY, LOGO_URL };
 }
 
+/**
+ * POST /api/auth/reset-password/:token
+ * Body: { password }
+ * Resets the user's password using the token.
+ */
+exports.resetPassword = async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { password } = req.body;
+    if (!token || !password) {
+      return res.status(400).json({ message: "Token and password are required" });
+    }
+    // Find user with valid token and expiry
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: Date.now() },
+    });
+    if (!user) {
+      return res.status(400).json({ message: "Token is invalid or has expired" });
+    }
+    // Set new password and clear reset fields
+    user.password = password;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
+    return res.json({ message: "Password reset successful" });
+  } catch (err) {
+    handleError("reset", err, res);
+  }
+};
 function resetEmailHTML(resetURL) {
   const { APP, COMPANY, LOGO_URL } = brand();
   const year = new Date().getFullYear();
@@ -250,7 +280,11 @@ exports.refreshToken = async (req, res) => {
  */
 exports.logoutUser = async (req, res) => {
   try {
+    // Log request headers for debugging
+    console.log(`[logout] Request received from origin: ${req.headers.origin}`);
+    console.log(`[logout] Request headers: ${JSON.stringify(req.headers)}`);
     const token = req.cookies?.rt;
+    console.log(`[logout] Cookie present: ${!!token}`);
     if (token) {
       const decoded = jwt.decode(token);
       if (decoded?.id) {
@@ -259,9 +293,14 @@ exports.logoutUser = async (req, res) => {
       }
     }
     
+    // Explicitly set headers to avoid CORS issues
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    if (req.headers.origin) {
+      res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+    }
     console.log(`[logout] Clearing cookie with SameSite=${isProd ? "none" : "lax"}, Secure=${isProd}`);
     
-    // Clear the cookie with explicit settings for cross-origin compatibility
+    // Method 1: Try the direct way first
     res.clearCookie("rt", { 
       path: "/",
       httpOnly: true, 
@@ -269,10 +308,27 @@ exports.logoutUser = async (req, res) => {
       secure: isProd 
     });
     
+    // Method 2: Also try with expired date as fallback
+    res.cookie("rt", "", {
+      path: "/",
+      httpOnly: true,
+      sameSite: isProd ? "none" : "lax",
+      secure: isProd,
+      expires: new Date(0)
+    });
+    
+    console.log('[logout] Sending success response');
+    
+    // Set cache headers to prevent caching
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    
     // Return success even if there's no token
-    return res.json({ 
+    return res.status(200).json({ 
       ok: true,
-      message: "Logout successful" 
+      message: "Logout successful",
+      timestamp: Date.now()
     });
   } catch (err) {
     console.log(`[logout] Error during logout: ${err.message}`);
@@ -285,9 +341,20 @@ exports.logoutUser = async (req, res) => {
       secure: isProd 
     });
     
-    return res.json({ 
+    // Also try with expired date
+    res.cookie("rt", "", {
+      path: "/",
+      httpOnly: true,
+      sameSite: isProd ? "none" : "lax",
+      secure: isProd,
+      expires: new Date(0)
+    });
+    
+    return res.status(200).json({ 
       ok: true,
-      message: "Logged out despite errors" 
+      message: "Logged out despite errors",
+      error: err.message,
+      timestamp: Date.now()
     });
   }
 };
@@ -307,7 +374,7 @@ exports.forgotPassword = async (req, res) => {
       console.log(`[forgot] No user found with email: ${email}`);
       return res.status(404).json({ message: "No user with that email" });
     }
-
+    
     const resetToken = crypto.randomBytes(32).toString("hex");
     user.resetPasswordToken = resetToken;
     user.resetPasswordExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
@@ -324,7 +391,7 @@ exports.forgotPassword = async (req, res) => {
         subject: "Reset your password",
         html: resetEmailHTML(resetURL),
       });
-      
+    
       console.log(`[forgot] Reset email sent to: ${email}`);
       return res.json({ message: "Reset link sent" });
     } catch (emailError) {
@@ -342,45 +409,3 @@ exports.forgotPassword = async (req, res) => {
   }
 };
 
-/**
- * POST /api/auth/reset-password/:token
- * Body: { password }
- * Resets the password if the token is valid and not expired.
- */
-exports.resetPassword = async (req, res) => {
-  try {
-    const { token } = req.params;
-    const { password } = req.body;
-    
-    if (!password) {
-      return res.status(400).json({ message: "Password is required" });
-    }
-    
-    console.log(`[resetPassword] Searching for user with token: ${token}`);
-    
-    const user = await User.findOne({
-      resetPasswordToken: token,
-      resetPasswordExpires: { $gt: Date.now() },
-    });
-    
-    if (!user) {
-      console.log(`[resetPassword] No valid user found for token: ${token}`);
-      return res.status(400).json({ message: "Invalid or expired token" });
-    }
-
-    console.log(`[resetPassword] User found: ${user._id}, updating password`);
-    
-    // Update the user's password
-    user.password = password;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpires = undefined;
-    
-    // The pre-save hook in the User model will hash the password
-    await user.save();
-
-    console.log(`[resetPassword] Password reset successful for user: ${user._id}`);
-    return res.json({ message: "Password reset successful" });
-  } catch (err) {
-    handleError("reset", err, res);
-  }
-};
