@@ -1,10 +1,17 @@
-import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+} from "react";
 import api from "../lib/api";
 
-// Creating a context for authentication state
+// Auth context
 const AuthCtx = createContext(null);
 
-// Function to set the authorization header on API requests
+// Attach/remove Authorization header on axios
 function setTokenHeader(token) {
   if (token) {
     api.defaults.headers.common.Authorization = `Bearer ${token}`;
@@ -13,118 +20,108 @@ function setTokenHeader(token) {
   }
 }
 
-// AuthProvider component that will wrap the rest of the app
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
-    const rawUser = localStorage.getItem("user");
-    return rawUser ? JSON.parse(rawUser) : null;
+    try {
+      const raw = localStorage.getItem("user");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
   });
-     
   const [token, setToken] = useState(() => localStorage.getItem("token") || "");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Syncing token with axios authorization header
+  // keep axios header in sync
   useEffect(() => {
     setTokenHeader(token);
   }, [token]);
 
-  // Memoizing login function to avoid unnecessary re-creations
-  const login = useCallback(async (email, password) => {
+  // 🔹 LOGIN (identifier = email OR username)
+  const login = useCallback(async (identifier, password) => {
     setIsLoading(true);
     setError(null);
-        
     try {
-      const { data } = await api.post("/api/auth/login", { email, password });
+      const { data } = await api.post("/api/auth/login", {
+        identifier,
+        password,
+      });
       localStorage.setItem("token", data.token);
       localStorage.setItem("user", JSON.stringify(data.user));
-
       setToken(data.token);
       setUser(data.user);
-
       return true;
-    } catch (e) {
-      const errorMessage = e?.response?.data?.message || "Login failed";
-      setError(errorMessage);
+    } catch (err) {
+      setError(err?.response?.data?.message || "Login failed");
       return false;
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  // FIXED: Proper logout function with API call
+  // 🔹 LOGOUT
   const logout = useCallback(async () => {
     setIsLoading(true);
-    
     try {
-      // Call logout API to clear refresh token cookie
-      await api.post("/api/auth/logout");
-      console.log("Logout API call successful");
-    } catch (error) {
-      // Log error but don't block logout
-      console.error("Logout API error:", error?.response?.data?.message || error.message);
+      await api.post("/api/auth/logout"); // backend clears refresh token cookie
+    } catch (err) {
+      console.error("Logout API failed:", err?.response?.data?.message || err.message);
     }
-
-    // Clear frontend state regardless of API call success
     localStorage.removeItem("token");
     localStorage.removeItem("user");
     setToken("");
     setUser(null);
     setTokenHeader(null);
     setIsLoading(false);
-
-    // Redirect to login page
     if (window.location.pathname !== "/login") {
       window.location.href = "/login";
     }
   }, []);
 
-  // Enhanced error clearing
-  const clearError = useCallback(() => {
-    setError(null);
-  }, []);
+  // 🔹 CLEAR ERROR
+  const clearError = useCallback(() => setError(null), []);
 
-  // Token refresh function (optional - for future use)
+  // 🔹 REFRESH TOKEN
   const refreshToken = useCallback(async () => {
     try {
       const { data } = await api.post("/api/auth/refresh");
       localStorage.setItem("token", data.token);
       setToken(data.token);
       return true;
-    } catch (error) {
-      console.error("Token refresh failed:", error);
-      logout(); // Force logout if refresh fails
+    } catch (err) {
+      console.error("Token refresh failed:", err);
+      logout();
       return false;
     }
   }, [logout]);
 
-  // Check if user is authenticated (optional - better validation)
-  const isAuthenticated = useMemo(() => {
-    return Boolean(token && user);
-  }, [token, user]);
+  // is user authenticated?
+  const isAuthed = useMemo(() => Boolean(token && user), [token, user]);
 
-  // Memoizing the AuthContext value
-  const value = useMemo(() => ({
-    user,
-    token,
-    isAuthed: isAuthenticated,
-    isLoading,
-    error,
-    login,
-    logout,
-    clearError,
-    refreshToken,
-    setUser, // If you decide to implement a /me refresh endpoint in the future
-  }), [user, token, isAuthenticated, isLoading, error, login, logout, clearError, refreshToken]);
+  const value = useMemo(
+    () => ({
+      user,
+      token,
+      isAuthed,
+      isLoading,
+      error,
+      login,
+      logout,
+      clearError,
+      refreshToken,
+      setUser,
+    }),
+    [user, token, isAuthed, isLoading, error, login, logout, clearError, refreshToken]
+  );
 
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }
 
-// Hook to access authentication context values
 export function useAuth() {
-  const context = useContext(AuthCtx);
-  if (!context) {
+  const ctx = useContext(AuthCtx);
+  if (!ctx) {
     throw new Error("useAuth must be used within an AuthProvider");
   }
-  return context;
+  return ctx;
 }

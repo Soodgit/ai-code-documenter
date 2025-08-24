@@ -4,13 +4,13 @@ import { useAuth } from "../context/AuthContext";
 
 export default function Login() {
   const { login, isLoading, error } = useAuth();
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState(""); // email OR username
   const [password, setPassword] = useState("");
   const nav = useNavigate();
 
   async function onSubmit(e) {
     e.preventDefault();
-    const ok = await login(email, password);
+    const ok = await login(identifier.trim(), password);
     if (ok) nav("/dashboard");
   }
 
@@ -26,14 +26,15 @@ export default function Login() {
         <p className="h-sub">Sign in to continue your journey</p>
 
         <form onSubmit={onSubmit} className="form">
-          <label className="label">Email</label>
+          <label className="label">Email or Username</label>
           <div className="field">
             <span className="icon">✉️</span>
             <input
-              type="email"
-              placeholder="name@company.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              // note: no type="email" so usernames are allowed
+              placeholder="Enter your email or username"
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
+              autoComplete="username"
               required
             />
           </div>
@@ -46,6 +47,7 @@ export default function Login() {
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
               required
             />
           </div>
@@ -114,12 +116,8 @@ function AuthStyles() {
       .h-sub{margin:0 0 22px; color:var(--muted)}
 
       .label{font-size:13px; font-weight:700; margin-bottom:8px; display:block}
-      .field{
-        position:relative; margin-bottom:16px;
-      }
-      .field .icon{
-        position:absolute; left:12px; top:10px; opacity:.7; font-size:16px;
-      }
+      .field{ position:relative; margin-bottom:16px; }
+      .field .icon{ position:absolute; left:12px; top:10px; opacity:.7; font-size:16px; }
       .field input{
         width:100%; padding:12px 12px 12px 36px;
         background:var(--panel2); border:1px solid var(--border);
