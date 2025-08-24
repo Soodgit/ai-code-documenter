@@ -1,4 +1,3 @@
-// server/models/User.js
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 
@@ -8,6 +7,9 @@ const userSchema = new mongoose.Schema(
     email:    { type: String, required: true, unique: true, index: true },
     // keep password out of queries by default; select it explicitly when needed
     password: { type: String, required: true, select: false },
+    refreshToken: { type: String, select: false },
+    resetPasswordToken: { type: String, select: false },
+    resetPasswordExpires: { type: Date, select: false }
   },
   { timestamps: true }
 );
