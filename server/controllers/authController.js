@@ -4,16 +4,13 @@ const nodemailer = require("nodemailer");
 const bcrypt = require("bcryptjs");
 const { validationResult } = require("express-validator");
 const User = require("../models/User");
-
 // Environment variables & constants
 const isProd = process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production";
-
 const ACCESS_SECRET = process.env.JWT_SECRET || "dev_access";
 const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || "dev_refresh";
 const ACCESS_TTL = process.env.JWT_EXPIRES_IN || "15m";  // Access token TTL (Time-to-Live)
 const REFRESH_TTL = "7d";  // Refresh token TTL (7 days)
 const COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;  // 7 days in milliseconds
-
 // Cookie settings for refresh token
 const rtCookie = {
   httpOnly: true,
@@ -22,7 +19,6 @@ const rtCookie = {
   path: "/",
   maxAge: COOKIE_MAX_AGE,
 };
-
 // Mailer configuration
 const transporter = nodemailer.createTransport({
   service: "gmail",
@@ -31,7 +27,6 @@ const transporter = nodemailer.createTransport({
     pass: process.env.EMAIL_PASS,
   },
 });
-
 // Helper Functions
 function ensureValid(req, res) {
   const errors = validationResult(req);
@@ -41,16 +36,13 @@ function ensureValid(req, res) {
   }
   return true;
 }
-
 function publicUser(u) {
   return { id: u._id, username: u.username, email: u.email };
 }
-
 function handleError(tag, err, res) {
   console.error(`[${tag}] error:`, err);
   res.status(500).json({ message: "Server error" });
 }
-
 function brand() {
   const APP = process.env.APP_NAME || "DevDocs AI";
   const COMPANY = process.env.COMPANY_NAME || "DevDocs Inc.";
@@ -267,13 +259,36 @@ exports.logoutUser = async (req, res) => {
       }
     }
     
-    // Clear the cookie
-    res.clearCookie("rt", { ...rtCookie, maxAge: 0 });
-    res.json({ ok: true });
+    console.log(`[logout] Clearing cookie with SameSite=${isProd ? "none" : "lax"}, Secure=${isProd}`);
+    
+    // Clear the cookie with explicit settings for cross-origin compatibility
+    res.clearCookie("rt", { 
+      path: "/",
+      httpOnly: true, 
+      sameSite: isProd ? "none" : "lax", 
+      secure: isProd 
+    });
+    
+    // Return success even if there's no token
+    return res.json({ 
+      ok: true,
+      message: "Logout successful" 
+    });
   } catch (err) {
     console.log(`[logout] Error during logout: ${err.message}`);
-    res.clearCookie("rt", { ...rtCookie, maxAge: 0 });
-    res.json({ ok: true });
+    
+    // Still try to clear the cookie even if there was an error
+    res.clearCookie("rt", { 
+      path: "/",
+      httpOnly: true, 
+      sameSite: isProd ? "none" : "lax", 
+      secure: isProd 
+    });
+    
+    return res.json({ 
+      ok: true,
+      message: "Logged out despite errors" 
+    });
   }
 };
 
