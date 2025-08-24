@@ -19,7 +19,7 @@ export function AuthProvider({ children }) {
     const rawUser = localStorage.getItem("user");
     return rawUser ? JSON.parse(rawUser) : null;
   });
-  
+     
   const [token, setToken] = useState(() => localStorage.getItem("token") || "");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -33,7 +33,7 @@ export function AuthProvider({ children }) {
   const login = useCallback(async (email, password) => {
     setIsLoading(true);
     setError(null);
-    
+        
     try {
       const { data } = await api.post("/api/auth/login", { email, password });
       localStorage.setItem("token", data.token);
@@ -52,13 +52,26 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
-  // Memoizing logout function for performance
-  const logout = useCallback(() => {
+  // FIXED: Proper logout function with API call
+  const logout = useCallback(async () => {
+    setIsLoading(true);
+    
+    try {
+      // Call logout API to clear refresh token cookie
+      await api.post("/api/auth/logout");
+      console.log("Logout API call successful");
+    } catch (error) {
+      // Log error but don't block logout
+      console.error("Logout API error:", error?.response?.data?.message || error.message);
+    }
+
+    // Clear frontend state regardless of API call success
     localStorage.removeItem("token");
     localStorage.removeItem("user");
-
     setToken("");
     setUser(null);
+    setTokenHeader(null);
+    setIsLoading(false);
 
     // Redirect to login page
     if (window.location.pathname !== "/login") {
@@ -66,22 +79,52 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  // Enhanced error clearing
+  const clearError = useCallback(() => {
+    setError(null);
+  }, []);
+
+  // Token refresh function (optional - for future use)
+  const refreshToken = useCallback(async () => {
+    try {
+      const { data } = await api.post("/api/auth/refresh");
+      localStorage.setItem("token", data.token);
+      setToken(data.token);
+      return true;
+    } catch (error) {
+      console.error("Token refresh failed:", error);
+      logout(); // Force logout if refresh fails
+      return false;
+    }
+  }, [logout]);
+
+  // Check if user is authenticated (optional - better validation)
+  const isAuthenticated = useMemo(() => {
+    return Boolean(token && user);
+  }, [token, user]);
+
   // Memoizing the AuthContext value
   const value = useMemo(() => ({
     user,
     token,
-    isAuthed: Boolean(token),
+    isAuthed: isAuthenticated,
     isLoading,
     error,
     login,
     logout,
-    setUser,  // If you decide to implement a /me refresh endpoint in the future
-  }), [user, token, isLoading, error, login, logout]);
+    clearError,
+    refreshToken,
+    setUser, // If you decide to implement a /me refresh endpoint in the future
+  }), [user, token, isAuthenticated, isLoading, error, login, logout, clearError, refreshToken]);
 
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }
 
 // Hook to access authentication context values
 export function useAuth() {
-  return useContext(AuthCtx);
+  const context = useContext(AuthCtx);
+  if (!context) {
+    throw new Error("useAuth must be used within an AuthProvider");
+  }
+  return context;
 }
