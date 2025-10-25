@@ -1,8 +1,8 @@
+// src/pages/Dashboard.jsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Editor from "@monaco-editor/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import html2pdf from "html2pdf.js";
-
 import {
   createSnippet,
   fetchSnippets,
@@ -12,9 +12,9 @@ import {
 import { doLogout } from "../utils/auth";
 
 /* ──────────────────────────────────────────────────────────────
-   Language presets
+   Language presets & constants
 ────────────────────────────────────────────────────────────── */
-const LANGS = ["typescript", "javascript", "python", "java", "c++", "plaintext"];
+const LANGS = ["auto", "typescript", "javascript", "python", "java", "c++", "plaintext"];
 
 const STARTER = {
   typescript: `export function formatTimestamp(ts: number) {
@@ -47,6 +47,7 @@ std::string formatTimestamp(long long ms) {
   plaintext: `# Paste any plain text here`,
 };
 
+// extension -> app language
 const EXT_LANG_MAP = {
   js: "javascript",
   jsx: "javascript",
@@ -64,11 +65,20 @@ const EXT_LANG_MAP = {
   md: "plaintext",
 };
 const ACCEPT_EXT = Object.keys(EXT_LANG_MAP);
-const MAX_PER_FILE = 1 * 1024 * 1024;
-const MAX_TOTAL = 2 * 1024 * 1024;
+const MAX_PER_FILE = 1 * 1024 * 1024; // 1 MB
+const MAX_TOTAL = 2 * 1024 * 1024;    // 2 MB
+
+const appLangToMonaco = {
+  javascript: "javascript",
+  typescript: "typescript",
+  python: "python",
+  java: "java",
+  "c++": "cpp",
+  plaintext: "plaintext",
+};
 
 /* ──────────────────────────────────────────────────────────────
-   Helpers
+   Small helpers
 ────────────────────────────────────────────────────────────── */
 function firstLine(str = "") {
   const line = str.split("\n")[0].trim();
@@ -76,6 +86,7 @@ function firstLine(str = "") {
 }
 function label(lang) {
   const map = {
+    auto: "Auto detect",
     javascript: "JavaScript",
     typescript: "TypeScript",
     python: "Python",
@@ -84,12 +95,6 @@ function label(lang) {
     plaintext: "Plain text",
   };
   return map[lang] || lang;
-}
-function prettyBytes(n) {
-  if (n < 1024) return `${n} B`;
-  const kb = n / 1024;
-  if (kb < 1024) return `${kb.toFixed(1)} KB`;
-  return `${(kb / 1024).toFixed(2)} MB`;
 }
 function extToLang(filename = "") {
   const m = filename.toLowerCase().match(/\.([a-z0-9]+)$/);
@@ -103,41 +108,132 @@ function readFileAsText(file) {
     r.readAsText(file);
   });
 }
+function prettyBytes(n) {
+  if (n < 1024) return `${n} B`;
+  const kb = n / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  return `${(kb / 1024).toFixed(2)} MB`;
+}
+function norm(s = "") {
+  return String(s).toLowerCase().normalize("NFKD").replace(/\s+/g, " ").trim();
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Strong language detection (Java before C++ when close)
+────────────────────────────────────────────────────────────── */
+function guessLang(code = "") {
+  const src = code.slice(0, 12000);
+  const first = (src.split("\n")[0] || "").trim();
+
+  // shebangs
+  if (/^#!.*\bpython\b/i.test(first)) return "python";
+  if (/^#!.*\bnode\b/i.test(first)) return "javascript";
+
+  // Java signals
+  const javaScore =
+    0 +
+    (/\bpackage\s+[a-zA-Z_][\w.]*\s*;/.test(src) ? 3 : 0) +
+    (/\bimport\s+java\./.test(src) ? 3 : 0) +
+    (/\bpublic\s+(class|interface|enum)\s+[A-Z]\w*/.test(src) ? 3 : 0) +
+    (/\bclass\s+[A-Z]\w*/.test(src) ? 2 : 0) +
+    (/\bpublic\s+static\s+void\s+main\s*\(\s*String\[\]\s+\w+\s*\)/.test(src) ? 4 : 0) +
+    (/\bSystem\.out\.println\s*\(/.test(src) ? 2 : 0);
+
+  // C++ signals
+  const cppScore =
+    0 +
+    (/#\s*include\s*<[^>]+>/.test(src) ? 4 : 0) +
+    (/\bstd::\w+/.test(src) ? 3 : 0) +
+    (/\busing\s+namespace\s+std\s*;/.test(src) ? 2 : 0) +
+    (/\btemplate\s*<[^>]+>/.test(src) ? 2 : 0) +
+    (/\bint\s+main\s*\(\s*(void)?\s*\)/.test(src) ? 3 : 0) +
+    (/\bcout\s*<</.test(src) ? 2 : 0);
+
+  // TS / JS
+  const tsScore =
+    (/\binterface\s+\w+/.test(src) ? 2 : 0) +
+    (/\btype\s+\w+\s*=/.test(src) ? 2 : 0) +
+    (/:\s*[A-Z]\w+(\[\])?/.test(src) ? 2 : 0) +
+    (/\bexport\s+(interface|type|class|function|const|let|var)\b/.test(src) ? 2 : 0);
+
+  const jsScore =
+    (/\b(function|const|let|var)\s+\w+/.test(src) ? 2 : 0) +
+    (/\bmodule\.exports\b|\brequire\(['"]/.test(src) ? 2 : 0) +
+    (/\bexport\s+(default\s+)?\w+/.test(src) ? 1 : 0);
+
+  // Python
+  const pyScore =
+    (/\bdef\s+\w+\s*\(/.test(src) ? 3 : 0) +
+    (/\bclass\s+[A-Z]\w*\s*:/.test(src) ? 2 : 0) +
+    (/\bimport\s+\w+/.test(src) ? 1 : 0) +
+    (/\bprint\s*\(/.test(src) ? 1 : 0);
+
+  const scores = [
+    ["java", javaScore],
+    ["c++", cppScore],
+    ["typescript", tsScore],
+    ["javascript", jsScore],
+    ["python", pyScore],
+  ].sort((a, b) => b[1] - a[1]);
+
+  const [topLang, topScore] = scores[0];
+
+  // prefer Java if close to C++
+  if (topLang === "c++") {
+    if (javaScore > 0 && cppScore - javaScore <= 1) return "java";
+  }
+
+  if (topScore <= 0) return "plaintext";
+  return topLang;
+}
 
 /* ──────────────────────────────────────────────────────────────
    Component
 ────────────────────────────────────────────────────────────── */
 export default function DashboardPage() {
-  /* theme + layout */
+  // Theme & layout
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "dark");
-  const [sidebarOpen, setSidebarOpen] = useState(() => {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
     const raw = localStorage.getItem("nxSidebarOpen");
     return raw === null ? true : raw === "true";
   });
 
-  /* snippet state */
-  const [language, setLanguage] = useState(() => localStorage.getItem("lang") || LANGS[0]);
-  const [code, setCode] = useState(() => STARTER[localStorage.getItem("lang")] || STARTER.typescript);
+  // Snippet state
+  const [language, setLanguage] = useState(() => localStorage.getItem("lang") || "auto");
+  const [detected, setDetected] = useState("plaintext");
+  const [code, setCode] = useState(() => {
+    const savedLang = localStorage.getItem("lang");
+    const base = STARTER[savedLang] || STARTER.typescript;
+    return base;
+  });
   const [docs, setDocs] = useState("");
   const [history, setHistory] = useState([]);
   const [activeId, setActiveId] = useState(null);
 
-  /* ui state */
+  // UI state
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState("");
-  const [uploaded, setUploaded] = useState([]);
+  const [uploaded, setUploaded] = useState([]); // {name, size}[]
 
-  /* refs */
+  // Refs
   const fileInputRef = useRef(null);
   const docsRef = useRef(null);
+  const monacoEditorRef = useRef(null);
+  const detectTimer = useRef(null);
 
-  /* effects */
+  /* Effects */
   useEffect(() => {
     document.documentElement.setAttribute("data-nx-theme", theme);
     localStorage.setItem("theme", theme);
   }, [theme]);
-  useEffect(() => localStorage.setItem("lang", language), [language]);
-  useEffect(() => localStorage.setItem("nxSidebarOpen", String(sidebarOpen)), [sidebarOpen]);
+
+  useEffect(() => {
+    localStorage.setItem("lang", language);
+  }, [language]);
+
+  useEffect(() => {
+    localStorage.setItem("nxSidebarOpen", String(isSidebarOpen));
+  }, [isSidebarOpen]);
 
   useEffect(() => {
     (async () => {
@@ -147,8 +243,10 @@ export default function DashboardPage() {
         setHistory(list);
         if (list[0]) {
           setActiveId(list[0]._id);
-          setLanguage(list[0].language);
-          setCode(list[0].code || STARTER[list[0].language] || "");
+          const l = list[0].language || "plaintext";
+          setLanguage((prev) => (prev === "auto" ? "auto" : l));
+          setDetected(l);
+          setCode(list[0].code || STARTER[l] || "");
           setDocs(list[0].documentation || "");
         }
       } catch (e) {
@@ -157,39 +255,47 @@ export default function DashboardPage() {
     })();
   }, []);
 
+  // Auto-detect language when user types (debounced)
   useEffect(() => {
-    const onKey = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-        e.preventDefault();
-        if (!disabled) onGenerate();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code, loading]);
+    if (language !== "auto") return;
+    if (detectTimer.current) clearTimeout(detectTimer.current);
+    detectTimer.current = setTimeout(() => {
+      setDetected(guessLang(code));
+    }, 200);
+    return () => detectTimer.current && clearTimeout(detectTimer.current);
+  }, [code, language]);
 
-  /* derived */
+  /* Derived */
+  const effectiveLang = language === "auto" ? detected : language;
   const disabled = useMemo(() => loading || !code.trim(), [loading, code]);
   const charCount = code.length;
+  const monacoTheme = theme === "dark" ? "vs-dark" : "vs-light";
+  const monacoLang = appLangToMonaco[effectiveLang] || "plaintext";
 
   const filtered = useMemo(() => {
-    const q = filter.trim().toLowerCase();
+    const q = norm(filter);
     if (!q) return history;
-    return history.filter(
-      (s) =>
-        (s.title || "").toLowerCase().includes(q) ||
-        s.language.toLowerCase().includes(q) ||
-        s.code.toLowerCase().includes(q) ||
-        (s.documentation || "").toLowerCase().includes(q)
-    );
+    return history.filter((s) => {
+      const t = norm(s?.title);
+      const lang = norm(s?.language);
+      const codeStr = norm(s?.code);
+      const docsStr = norm(s?.documentation);
+      const created = s?.createdAt ? norm(new Date(s.createdAt).toLocaleString()) : "";
+      return (
+        t.includes(q) ||
+        lang.includes(q) ||
+        codeStr.includes(q) ||
+        docsStr.includes(q) ||
+        created.includes(q)
+      );
+    });
   }, [filter, history]);
 
-  /* actions */
+  /* Actions */
   const onGenerate = useCallback(async () => {
     try {
       setLoading(true);
-      const created = await createSnippet({ language, code });
+      const created = await createSnippet({ language: effectiveLang, code });
       setDocs(created.documentation || "");
       setActiveId(created._id);
       setHistory((prev) => [created, ...prev]);
@@ -198,16 +304,19 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [language, code]);
+  }, [effectiveLang, code]);
 
   const onSelectHistory = useCallback(
     (id) => {
       const s = history.find((x) => x._id === id);
       if (!s) return;
       setActiveId(id);
-      setLanguage(s.language);
-      setCode(s.code);
+      // Keep user’s selection mode (auto/manual), but update detected
+      setDetected(s.language || "plaintext");
+      setCode(s.code || "");
       setDocs(s.documentation || "");
+      monacoEditorRef.current?.setScrollTop(0);
+      monacoEditorRef.current?.setPosition({ lineNumber: 1, column: 1 });
     },
     [history]
   );
@@ -249,54 +358,95 @@ export default function DashboardPage() {
     navigator.clipboard.writeText(docs || "").catch(() => {});
   }, [docs]);
 
-  /* real PDF (no browser header/footer) */
-  const onDownloadPdf = useCallback(() => {
-    const el = docsRef.current;
-    if (!el || !docs.trim()) {
-      alert("Nothing to export.");
+  // Clean PDF export (hidden iframe + print; CSS hides headers/footers in most browsers)
+  const onExportPdf = useCallback(() => {
+    const printable = docsRef.current;
+    if (!printable) return;
+
+    const html = `
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Documentation</title>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box}
+    body{
+      font-family:Sora,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica Neue,Arial;
+      color:#0f1535;margin:24px;background:#fff;
+      -webkit-print-color-adjust:exact; print-color-adjust:exact;
+    }
+    h1,h2,h3,h4{margin:.4rem 0}
+    h1{font-size:22px;font-weight:800}
+    h2{font-size:18px;font-weight:800}
+    h3{font-size:16px;font-weight:700}
+    p{line-height:1.8;margin:.4rem 0}
+    code{font-family:ui-monospace,Menlo,Consolas,monospace;background:#f5f7ff;border:1px solid #e3e9ff;padding:2px 6px;border-radius:6px}
+    pre{background:#f5f7ff;border:1px solid #e3e9ff;padding:12px;border-radius:12px;overflow:auto}
+    table{border-collapse:collapse;width:100%;margin:.4rem 0}
+    th,td{border:1px solid #e3e9ff;padding:8px;text-align:left}
+    th{background:#f5f7ff}
+    @page{size:auto; margin:10mm}
+    @media print {
+      a[href]:after{content:""}
+      header,footer{display:none !important}
+    }
+  </style>
+</head>
+<body>
+  ${printable.innerHTML}
+</body>
+</html>`.trim();
+
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.width = "0";
+    iframe.style.height = "0";
+    iframe.style.border = "0";
+    iframe.setAttribute("aria-hidden", "true");
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!doc) {
+      document.body.removeChild(iframe);
       return;
     }
+    doc.open();
+    doc.write(html);
+    doc.close();
 
-    // Clone to a clean, print-friendly container
-    const container = document.createElement("div");
-    container.className = "pdf-root";
-    container.innerHTML = `
-      <div class="pdf-page">
-        ${el.innerHTML}
-      </div>
-    `;
-    document.body.appendChild(container);
-
-    const opt = {
-      margin: [10, 12], // mm
-      filename: `documentation-${new Date().toISOString().slice(0,19)}.pdf`,
-      image: { type: "jpeg", quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
-      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-      pagebreak: { mode: ["css", "legacy"] },
+    const doPrint = () => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } finally {
+        setTimeout(() => document.body.removeChild(iframe), 1500);
+      }
     };
 
-    html2pdf()
-      .from(container)
-      .set(opt)
-      .save()
-      .then(() => {
-        document.body.removeChild(container);
-      })
-      .catch((e) => {
-        console.error(e);
-        document.body.removeChild(container);
-        alert("Failed to generate PDF.");
-      });
-  }, [docs]);
+    if (doc.readyState === "complete") setTimeout(doPrint, 120);
+    else (iframe.onload = () => setTimeout(doPrint, 120));
+  }, []);
 
   const onChangeLanguage = useCallback((l) => {
     setLanguage(l);
-    setCode(STARTER[l] || "");
-    setDocs("");
-  }, []);
+    if (l !== "auto") {
+      const starterCode = STARTER[l] || "";
+      setCode(starterCode);
+      setDocs("");
+      setDetected(l);
+    } else {
+      // When switching to auto mode, detect from current code
+      // If code is empty or matches a starter template, set to plaintext
+      const currentDetected = guessLang(code);
+      setDetected(currentDetected);
+    }
+  }, [code]);
 
-  /* uploads */
+  /* Uploads */
   async function handleFiles(fileList) {
     const files = Array.from(fileList || []);
     if (!files.length) return;
@@ -305,22 +455,38 @@ export default function DashboardPage() {
       const ext = (f.name.split(".").pop() || "").toLowerCase();
       return ACCEPT_EXT.includes(ext);
     });
-    if (allowed.length === 0) return alert("Only code/text files are allowed.");
+    if (allowed.length === 0) {
+      alert("Only code/text files are allowed.");
+      return;
+    }
 
     const total = allowed.reduce((s, f) => s + f.size, 0);
-    if (total > MAX_TOTAL) return alert(`Total upload too large: ${prettyBytes(total)} (max ${prettyBytes(MAX_TOTAL)})`);
-    if (allowed.some((f) => f.size > MAX_PER_FILE)) return alert(`A file exceeds ${prettyBytes(MAX_PER_FILE)} limit.`);
+    if (total > MAX_TOTAL) {
+      alert(`Total upload too large: ${prettyBytes(total)} (max ${prettyBytes(MAX_TOTAL)})`);
+      return;
+    }
+    if (allowed.some((f) => f.size > MAX_PER_FILE)) {
+      alert(`A file exceeds ${prettyBytes(MAX_PER_FILE)} limit.`);
+      return;
+    }
 
-    if (!code.trim()) setLanguage(extToLang(allowed[0]?.name));
+    // if first content and language is auto, prefer first file's extension
+    if (!code.trim() && language === "auto") {
+      const byExt = extToLang(allowed[0]?.name);
+      setDetected(byExt);
+    } else if (!code.trim() && language !== "auto") {
+      setLanguage(extToLang(allowed[0]?.name));
+    }
 
     let merged = code ? code.trimEnd() + "\n\n" : "";
     for (const f of allowed) {
       try {
         const txt = await readFileAsText(f);
+        const localLang = language === "auto" ? guessLang(txt) : language;
         const header =
-          language === "python"
+          localLang === "python"
             ? `# ==== ${f.name} ====\n`
-            : language === "plaintext"
+            : localLang === "plaintext"
             ? `==== ${f.name} ====\n`
             : `// ==== ${f.name} ====\n`;
         merged += header + txt.trimEnd() + "\n\n";
@@ -328,16 +494,38 @@ export default function DashboardPage() {
         alert(`Failed to read: ${f.name}`);
       }
     }
+
     setCode(merged);
     setUploaded((prev) => [...prev, ...allowed.map((f) => ({ name: f.name, size: f.size }))]);
   }
-  function onPickClick() { fileInputRef.current?.click(); }
-  function onInputChange(e) { handleFiles(e.target.files); e.target.value = ""; }
-  function onDrop(e) { e.preventDefault(); e.stopPropagation(); if (e.dataTransfer?.files?.length) handleFiles(e.dataTransfer.files); }
-  function onDragOver(e) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }
-  function removeUploaded(name) { setUploaded((list) => list.filter((x) => x.name !== name)); }
+  const onPickClick = () => fileInputRef.current?.click();
+  const onInputChange = (e) => {
+    handleFiles(e.target.files);
+    e.target.value = "";
+  };
+  const onDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer?.files?.length) handleFiles(e.dataTransfer.files);
+  };
+  const onDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+  const removeUploaded = (name) => {
+    setUploaded((list) => list.filter((x) => x.name !== name));
+  };
 
-  /* render */
+  /* Monaco mount (bind Ctrl/Cmd+Enter) */
+  const handleEditorMount = useCallback((editor, monaco) => {
+    monacoEditorRef.current = editor;
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+      if (!disabled) onGenerate();
+    });
+    editor.updateOptions({ minimap: { enabled: false } });
+  }, [onGenerate, disabled]);
+
+  /* Render */
   return (
     <>
       <Styles />
@@ -347,13 +535,12 @@ export default function DashboardPage() {
           <div className="nx-left">
             <button
               className="nx-icon-btn"
-              onClick={() => setSidebarOpen((s) => !s)}
-              title={sidebarOpen ? "Hide history" : "Show history"}
-              aria-label={sidebarOpen ? "Hide history" : "Show history"}
+              onClick={() => setIsSidebarOpen((s) => !s)}
+              title={isSidebarOpen ? "Hide history" : "Show history"}
+              aria-label={isSidebarOpen ? "Hide history" : "Show history"}
             >
-              <span className="nx-hamburger" aria-hidden="true" />
+              ☰
             </button>
-
             <img src="/Logo.png" alt="DevDocs AI" className="nx-logo" decoding="async" loading="eager" />
             <div className="nx-title">
               <div className="nx-brand">DevDocs AI</div>
@@ -368,12 +555,20 @@ export default function DashboardPage() {
               title="Toggle theme"
               aria-label="Toggle theme"
             >
-              <span className="nx-theme-emoji" aria-hidden="true">{theme === "dark" ? "🌙" : "☀️"}</span>
+              {theme === "dark" ? "🌙" : "☀️"}
             </button>
 
-            <select value={language} onChange={(e) => onChangeLanguage(e.target.value)} className="nx-select" aria-label="Language">
+            <select
+              value={language}
+              onChange={(e) => onChangeLanguage(e.target.value)}
+              className="nx-select"
+              aria-label="Language"
+              title="Language mode"
+            >
               {LANGS.map((l) => (
-                <option key={l} value={l}>{l}</option>
+                <option key={l} value={l}>
+                  {label(l)}
+                </option>
               ))}
             </select>
 
@@ -381,10 +576,12 @@ export default function DashboardPage() {
           </div>
         </header>
 
-        <div className={`nx-main ${sidebarOpen ? "has-sidebar" : "no-sidebar"}`}>
-          {sidebarOpen && (
+        <div className={`nx-main ${isSidebarOpen ? "has-sidebar" : "no-sidebar"}`}>
+          {/* Sidebar (removed from DOM when collapsed) */}
+          {isSidebarOpen && (
             <aside className="nx-pane nx-card nx-sidebar">
               <div className="nx-pane-head">
+                {/* intentionally no “History” title */}
                 <div style={{ height: 18 }} />
                 <div className="nx-head-controls">
                   <input
@@ -414,12 +611,22 @@ export default function DashboardPage() {
                         <div className="nx-actions-inline">
                           <button
                             className="nx-mini"
-                            onClick={(e) => { e.stopPropagation(); onRename(s._id); }}
-                          >Rename</button>
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onRename(s._id);
+                            }}
+                          >
+                            Rename
+                          </button>
                           <button
                             className="nx-mini nx-danger"
-                            onClick={(e) => { e.stopPropagation(); onDelete(s._id); }}
-                          >Delete</button>
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDelete(s._id);
+                            }}
+                          >
+                            Delete
+                          </button>
                         </div>
                       </div>
                       <div className="nx-item-title">{s.title || firstLine(s.code)}</div>
@@ -436,12 +643,14 @@ export default function DashboardPage() {
             <div className="nx-pane-head">
               <h3>Your Code</h3>
               <div className="nx-head-meta">
-                <span className="nx-chip">{label(language)}</span>
+                <span className="nx-chip">
+                  {language === "auto" ? `Auto: ${label(effectiveLang)}` : label(effectiveLang)}
+                </span>
                 <span className="nx-meta">{charCount.toLocaleString()} chars</span>
               </div>
             </div>
 
-            {/* Upload */}
+            {/* Upload / Dropzone */}
             <div className="nx-dropzone" onDrop={onDrop} onDragOver={onDragOver} role="button" tabIndex={0} aria-label="Drop files here">
               <div className="nx-drop-inner">
                 <div className="nx-drop-left">
@@ -479,18 +688,37 @@ export default function DashboardPage() {
               )}
             </div>
 
+            {/* Monaco Editor */}
             <div className="nx-editor">
-              <textarea
+              <Editor
+                height="58vh"
+                language={monacoLang}
+                theme={monacoTheme}
                 value={code}
-                onChange={(e) => setCode(e.target.value)}
-                spellCheck={false}
-                placeholder="// Paste or type code here…"
-                aria-label="Code editor"
+                onChange={(v) => setCode(v ?? "")}
+                onMount={handleEditorMount}
+                options={{
+                  fontSize: 14,
+                  lineHeight: 24,
+                  wordWrap: "on",
+                  scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+                  smoothScrolling: true,
+                  automaticLayout: true,
+                  renderLineHighlight: "line",
+                  tabSize: 2,
+                  insertSpaces: true,
+                }}
               />
             </div>
 
             <div className="nx-pane-foot">
-              <button className="nx-btn nx-primary" onClick={onGenerate} disabled={disabled} aria-busy={loading} title="Ctrl/Cmd + Enter">
+              <button
+                className="nx-btn nx-primary"
+                onClick={onGenerate}
+                disabled={disabled}
+                aria-busy={loading}
+                title="Ctrl/Cmd + Enter"
+              >
                 {loading ? "Generating…" : "✨ Generate Documentation"}
               </button>
             </div>
@@ -502,7 +730,7 @@ export default function DashboardPage() {
               <h3>AI Generated Documentation</h3>
               <div className="nx-actions-inline">
                 <button className="nx-btn nx-ghost nx-sm" onClick={onCopyDocs}>Copy</button>
-                <button className="nx-btn nx-ghost nx-sm" onClick={onDownloadPdf}>Download PDF</button>
+                <button className="nx-btn nx-ghost nx-sm" onClick={onExportPdf}>Download PDF</button>
               </div>
             </div>
 
@@ -543,7 +771,7 @@ export default function DashboardPage() {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   Styles (UI + PDF)
+   Styles
 ────────────────────────────────────────────────────────────── */
 function Styles() {
   return (
@@ -582,6 +810,7 @@ function Styles() {
         box-shadow: var(--nx-shadow);
       }
 
+      /* Header */
       .nx-header{
         height:72px;display:flex;align-items:center;justify-content:space-between;
         padding:0 18px; margin:14px; backdrop-filter: blur(10px);
@@ -591,45 +820,29 @@ function Styles() {
       .nx-brand{font-weight:800;}
       .nx-sub{font-size:12px; color:var(--nx-muted); margin-top:2px}
       .nx-right{display:flex;gap:10px;align-items:center}
-
       .nx-icon-btn{
         height:42px;width:42px;border-radius:12px;border:1px solid var(--nx-border);
-        background:var(--nx-surface2); cursor:pointer; display:grid; place-items:center;
-        color:var(--nx-text);
-        font-size:18px; line-height:1; /* visible emoji */
+        background:var(--nx-surface2); cursor:pointer; font-size:18px;
       }
       .nx-icon-btn:hover{ box-shadow:0 0 0 2px var(--nx-ring) }
-      .nx-hamburger{
-        width:18px; height:14px; display:block;
-        background:
-          linear-gradient(currentColor, currentColor) 0 0 / 100% 2px no-repeat,
-          linear-gradient(currentColor, currentColor) 0 6px / 100% 2px no-repeat,
-          linear-gradient(currentColor, currentColor) 0 12px / 100% 2px no-repeat;
-        border-radius:2px; opacity:.95;
-      }
-      .nx-theme-emoji{ font-size:18px; line-height:1; }
 
       .nx-select{
         background:var(--nx-surface2);color:var(--nx-text);border:1px solid var(--nx-border);
         padding:10px 12px;border-radius:12px;outline:none;font-weight:600;
       }
 
+      /* Grid */
       .nx-main{
         display:grid; gap:18px;
         padding:0 14px 14px 14px; height:calc(100vh - 100px); overflow:hidden;
       }
       .nx-main.has-sidebar{ grid-template-columns:300px 1fr 520px; }
-      .nx-main.no-sidebar{ grid-template-columns:1fr 520px; }
+      .nx-main.no-sidebar{  grid-template-columns:1fr 520px; }
 
-      .nx-pane{display:flex;flex-direction:column;overflow:hidden}
-      .nx-pane-head{
-        display:flex; align-items:center; justify-content:space-between;
-        padding:14px 16px; border-bottom:1px solid var(--nx-border); background:var(--nx-surface2);
-        border-top-left-radius: var(--nx-radius); border-top-right-radius: var(--nx-radius);
-      }
-      .nx-pane-head h3{margin:0;font-size:15px;font-weight:800}
-      .nx-pane-foot{padding:12px 14px;border-top:1px solid var(--nx-border);background:var(--nx-surface2)}
+      /* Sidebar */
+      .nx-sidebar{overflow:hidden}
 
+      /* Inputs & buttons */
       .nx-input{
         width:46%; min-width:220px;
         border:1px solid var(--nx-border); background:var(--nx-surface); color:var(--nx-text);
@@ -650,6 +863,17 @@ function Styles() {
       }
       .nx-mini.nx-danger{color:#fff; background:linear-gradient(90deg,var(--nx-danger),#ff8b8b); border:none}
 
+      /* Panels */
+      .nx-pane{display:flex;flex-direction:column;overflow:hidden}
+      .nx-pane-head{
+        display:flex; align-items:center; justify-content:space-between;
+        padding:14px 16px; border-bottom:1px solid var(--nx-border); background:var(--nx-surface2);
+        border-top-left-radius: var(--nx-radius); border-top-right-radius: var(--nx-radius);
+      }
+      .nx-pane-head h3{margin:0;font-size:15px;font-weight:800}
+      .nx-pane-foot{padding:12px 14px;border-top:1px solid var(--nx-border);background:var(--nx-surface2)}
+
+      /* History list */
       .nx-list{padding:12px;overflow:auto}
       .nx-empty{color:var(--nx-muted);padding:8px 6px}
       .nx-item{
@@ -664,7 +888,8 @@ function Styles() {
       .nx-item-title{font-weight:800; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
       .nx-item-meta{color:var(--nx-muted); font-size:12px; margin-top:2px}
 
-      .nx-dropzone{ margin:12px; border:1px dashed var(--nx-border); border-radius:14px; background: var(--nx-surface2); }
+      /* Upload / Dropzone */
+      .nx-dropzone{ margin: 12px; border:1px dashed var(--nx-border); border-radius:14px; background: var(--nx-surface2); }
       .nx-drop-inner{ display:flex; align-items:center; justify-content:space-between; padding:12px 14px; }
       .nx-drop-title{font-weight:800}
       .nx-drop-sub{font-size:12px; color:var(--nx-muted)}
@@ -674,17 +899,10 @@ function Styles() {
       .nx-file-name{max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
       .nx-file-size{color:var(--nx-muted); font-size:12px}
 
+      /* Editor */
       .nx-editor{padding:12px;overflow:auto;flex:1}
-      .nx-editor textarea{
-        width:100%; height:58vh; border-radius:14px; padding:14px 16px; resize:vertical;
-        background:var(--nx-surface2); color:var(--nx-text); border:1px solid var(--nx-border);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-        font-size:14px; line-height:1.6;
-      }
-      .nx-head-meta{display:flex; gap:10px; align-items:center}
-      .nx-chip{font-size:12px; padding:6px 10px; border-radius:999px; border:1px solid var(--nx-brand); color:var(--nx-brand); background:transparent}
-      .nx-meta{color:var(--nx-muted); font-size:12px; font-weight:600}
 
+      /* Docs / Markdown */
       .nx-doc{padding:12px;overflow:auto}
       .nx-table-wrap{overflow-x:auto}
       table{border-collapse:collapse;width:100%}
@@ -696,43 +914,14 @@ function Styles() {
       .nx-md-p{line-height:1.8;margin:.5rem 0}
       .nx-md-ul{margin:.4rem 0 .7rem 1.2rem}
       .nx-md-li{margin:.22rem 0}
-      .nx-md-pre{
-        background:var(--nx-surface2); padding:12px; border-radius:14px; overflow:auto; border:1px solid var(--nx-border);
-        white-space:pre-wrap; word-break:break-word; /* better for PDF */
-      }
+      .nx-md-pre{background:var(--nx-surface2); padding:12px; border-radius:14px; overflow:auto; border:1px solid var(--nx-border)}
       .nx-md-code{background:var(--nx-surface2); padding:2px 6px; border-radius:6px}
 
+      /* Responsive */
       @media (max-width:1040px){
         .nx-main.has-sidebar{ grid-template-columns: 1fr; }
         .nx-sidebar{ order: 1; }
       }
-
-      /* ───── PDF styling (html2pdf target) ───── */
-      .pdf-root{
-        all: initial; /* avoid app styles leaking */
-        font-family: Sora, Arial, sans-serif;
-        color: #0f1535;
-      }
-      .pdf-page{
-        width: 210mm;
-        min-height: 297mm;
-        box-sizing: border-box;
-        padding: 12mm;
-        background: #fff;
-      }
-      .pdf-page h1,.pdf-page h2,.pdf-page h3{ margin: .4rem 0; }
-      .pdf-page table{ width: 100%; border-collapse: collapse; }
-      .pdf-page th,.pdf-page td{ border:1px solid #e3e9ff; padding:8px; }
-      .pdf-page th{ background:#f5f7ff }
-      .pdf-page pre{
-        background:#f5f7ff; border:1px solid #e3e9ff; padding:12px; border-radius:12px;
-        white-space: pre-wrap; word-break: break-word;
-      }
-      .pdf-page code{
-        background:#f5f7ff; border:1px solid #e3e9ff; padding:2px 6px; border-radius:6px;
-        font-family: ui-monospace, Menlo, Consolas, monospace;
-      }
-      .pdf-page .nx-table-wrap{ overflow: visible; } /* ensure captured in canvas */
     `}</style>
   );
 }

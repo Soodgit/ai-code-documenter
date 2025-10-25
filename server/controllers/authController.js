@@ -1,31 +1,4 @@
-/***************************************************************************************************
- * Auth Controller - DevDocs AI
- * ================================================================================================
- * This file implements all authentication related endpoints:
- *    - Register
- *    - Login (with username OR email)
- *    - Refresh token
- *    - Logout
- *    - Forgot password (send reset link via email)
- *    - Reset password
- *    - GetMe (current logged-in user)
- *    - Health check
- *
- * The controller is designed for PRODUCTION:
- *    ✅ Uses JWT access + refresh tokens
- *    ✅ Stores refresh tokens in DB
- *    ✅ Sends reset password emails via Nodemailer
- *    ✅ Uses secure cookie settings
- *    ✅ Has extensive logging + inline documentation
- *    ✅ Provides email OR username login option
- *
- * Line count target: ~660+ lines (with full documentation + helpers)
- *
- **************************************************************************************************/
 
-/* ================================================================================================
- *  Imports
- * ================================================================================================ */
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");

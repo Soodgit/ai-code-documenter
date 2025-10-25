@@ -1,9 +1,21 @@
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
-  plugins: [tailwindcss(), react()],
+  plugins: [tailwindcss()],
+  esbuild: {
+    jsx: 'automatic',
+    loader: 'jsx',
+    include: /src\/.*\.[jt]sx?$/,
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      loader: {
+        '.js': 'jsx',
+        '.jsx': 'jsx',
+      },
+    },
+  },
   server: {
     proxy: {
       '/api': {
