@@ -89,7 +89,7 @@ async function generateWithGemini(language, code) {
   const client = await ensureGemini();
   if (!client) return localFallback(language, code); // no key configured
 
-  const modelName = process.env.GEMINI_MODEL || "gemini-pro";
+  const modelName = process.env.GEMINI_MODEL || "gemini-2.0-flash";
   const model = client.getGenerativeModel({ model: modelName });
   const prompt = buildPrompt(language, code);
 
