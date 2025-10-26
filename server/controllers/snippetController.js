@@ -78,12 +78,15 @@ ${code}
 // Generate with Gemini using direct REST API
 async function generateWithGemini(language, code) {
   const apiKey = process.env.GOOGLE_API_KEY;
-  if (!apiKey) return localFallback(language, code);
+  if (!apiKey) {
+    console.log("[snippets] No API key found");
+    return localFallback(language, code);
+  }
 
   const modelName = process.env.GEMINI_MODEL || "models/gemini-2.5-flash-preview-05-20";
   const prompt = buildPrompt(language, code);
 
-  // Direct REST API call
+  // Direct REST API call - without timeout to debug
   const apiUrl = `https://generativelanguage.googleapis.com/v1beta/${modelName}:generateContent?key=${apiKey}`;
 
   const requestBody = {
@@ -94,21 +97,18 @@ async function generateWithGemini(language, code) {
     }]
   };
 
-  try {
-    const controller = new AbortController();
-    const timeoutMs = Number(process.env.GEMINI_TIMEOUT_MS || 15000);
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  console.log("[snippets] Calling Gemini API...", modelName);
 
+  try {
     const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal
+      body: JSON.stringify(requestBody)
     });
 
-    clearTimeout(timeout);
+    console.log("[snippets] Response status:", response.status);
 
     if (!response.ok) {
       const errorData = await response.text();
@@ -117,6 +117,7 @@ async function generateWithGemini(language, code) {
     }
 
     const data = await response.json();
+    console.log("[snippets] Got response from Gemini!");
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
     return text.trim() || localFallback(language, code);
