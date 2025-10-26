@@ -415,6 +415,9 @@ exports.logoutUser = async (req, res) => {
 exports.forgotPassword = async (req, res) => {
   try {
     console.log("[FORGOT] Request received");
+    console.log("[FORGOT] Transporter status:", !!transporter);
+    console.log("[FORGOT] EMAIL_USER:", process.env.EMAIL_USER ? "Set" : "Missing");
+    console.log("[FORGOT] EMAIL_PASS:", process.env.EMAIL_PASS ? "Set" : "Missing");
 
     const { email } = req.body;
 
@@ -424,10 +427,10 @@ exports.forgotPassword = async (req, res) => {
 
     const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user) {
+      // Security: Don't reveal if user exists
       return res.json({
         success: true,
-        message:
-          "If an account with that email exists, a reset link has been sent",
+        message: "If an account with that email exists, a reset link has been sent",
       });
     }
 
@@ -441,31 +444,60 @@ exports.forgotPassword = async (req, res) => {
     user.resetPasswordExpires = Date.now() + 10 * 60 * 1000;
     await user.save({ validateBeforeSave: false });
 
-    const resetURL = `${
-      process.env.CLIENT_URL || "http://localhost:5173"
-    }/reset-password/${resetToken}`;
+    const resetURL = `${process.env.CLIENT_URL || "http://localhost:5173"}/reset-password/${resetToken}`;
+
+    // Try to initialize transporter if not available
+    if (!transporter && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+      console.log("[FORGOT] Initializing transporter on-demand...");
+      try {
+        transporter = nodemailer.createTransport({
+          service: "gmail",
+          auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS,
+          },
+        });
+        console.log("[FORGOT] Transporter initialized successfully");
+      } catch (initErr) {
+        console.error("[FORGOT] Transporter init failed:", initErr.message);
+      }
+    }
 
     if (transporter) {
-      await transporter.sendMail({
-        from: `"${process.env.APP_NAME || "DevDocs AI"}" <${
-          process.env.EMAIL_USER
-        }>`,
-        to: user.email,
-        subject: "Reset your password",
-        html: resetEmailHTML(resetURL),
-      });
+      try {
+        console.log("[FORGOT] Attempting to send email to:", user.email);
+        const info = await transporter.sendMail({
+          from: `"${process.env.APP_NAME || "DevDocs AI"}" <${process.env.EMAIL_USER}>`,
+          to: user.email,
+          subject: "Reset your password",
+          html: resetEmailHTML(resetURL),
+        });
 
-      return res.json({
-        success: true,
-        message: "Password reset link sent to your email",
-      });
+        console.log("[FORGOT] Email sent successfully:", info.messageId);
+        return res.json({
+          success: true,
+          message: "Password reset link sent to your email",
+        });
+      } catch (emailErr) {
+        console.error("[FORGOT] Email send failed:", emailErr);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to send reset email. Please try again or contact support.",
+        });
+      }
     } else {
-      return res.status(500).json({
-        message: "Email service not available",
+      console.error("[FORGOT] Transporter not available after initialization attempt");
+      return res.status(503).json({
+        success: false,
+        message: "Email service is temporarily unavailable. Please try again later or contact support.",
       });
     }
   } catch (err) {
-    handleError("forgot", err, res);
+    console.error("[FORGOT] Unexpected error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "An error occurred while processing your request. Please try again.",
+    });
   }
 };
 
