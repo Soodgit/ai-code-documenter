@@ -1,17 +1,8 @@
 // controllers/snippetController.js
 const Snippet = require("../models/Snippet");
 
-// ---------------- Gemini (lazy ESM import, only if a key exists) ----------------
-let geminiClient = null;
-
-async function ensureGemini() {
-  if (!process.env.GOOGLE_API_KEY) return null;
-  if (!geminiClient) {
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-    geminiClient = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-  }
-  return geminiClient;
-}
+// ---------------- Gemini (Direct REST API - no SDK needed) ----------------
+// Using direct fetch to avoid SDK compatibility issues
 
 // Normalize language labels for prompt clarity
 function normalizeLanguage(lang = "") {
@@ -84,37 +75,54 @@ ${code}
 `;
 }
 
-// Generate with Gemini (with timeout + graceful fallback)
+// Generate with Gemini using direct REST API
 async function generateWithGemini(language, code) {
-  const client = await ensureGemini();
-  if (!client) return localFallback(language, code); // no key configured
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) return localFallback(language, code);
 
-  const modelName = process.env.GEMINI_MODEL || "gemini-2.0-flash";
-  const model = client.getGenerativeModel({ model: modelName });
+  const modelName = process.env.GEMINI_MODEL || "models/gemini-2.5-flash-preview-05-20";
   const prompt = buildPrompt(language, code);
 
-  const ac = new AbortController();
-  const timeoutMs = Number(process.env.GEMINI_TIMEOUT_MS || 15000);
-  const t = setTimeout(() => ac.abort(), timeoutMs);
+  // Direct REST API call
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/${modelName}:generateContent?key=${apiKey}`;
+
+  const requestBody = {
+    contents: [{
+      parts: [{
+        text: prompt
+      }]
+    }]
+  };
 
   try {
-    const result = await model.generateContent(
-      { contents: [{ role: "user", parts: [{ text: prompt }] }] },
-      { signal: ac.signal }
-    );
+    const controller = new AbortController();
+    const timeoutMs = Number(process.env.GEMINI_TIMEOUT_MS || 15000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-    // SDK shape: result.response.text()
-    const text =
-      (result?.response && typeof result.response.text === "function"
-        ? result.response.text()
-        : "") || "";
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.warn("[snippets] Gemini API error:", response.status, errorData);
+      return localFallback(language, code);
+    }
+
+    const data = await response.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
     return text.trim() || localFallback(language, code);
   } catch (err) {
     console.warn("[snippets] Gemini error — using fallback:", err?.message || err);
     return localFallback(language, code);
-  } finally {
-    clearTimeout(t);
   }
 }
 
